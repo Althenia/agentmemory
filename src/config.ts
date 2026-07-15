@@ -10,6 +10,7 @@ import type {
   ClaudeBridgeConfig,
   TeamConfig,
 } from "./types.js";
+import { OpenAIOAuthStore, isUsableOpenAIOAuthRecord } from "./openai-oauth/store.js";
 
 function safeParseInt(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
@@ -50,7 +51,10 @@ function hasRealValue(v: string | undefined): v is string {
   return typeof v === "string" && v.trim().length > 0;
 }
 
-function detectProvider(env: Record<string, string>): ProviderConfig {
+export function detectProvider(
+  env: Record<string, string>,
+  oauthRecord = new OpenAIOAuthStore().loadSync(),
+): ProviderConfig {
   const maxTokens = parseInt(env["MAX_TOKENS"] || "4096", 10);
 
   // OpenAI-compatible: supports OpenAI, DeepSeek, SiliconFlow, Azure, vLLM, LM Studio
@@ -60,6 +64,14 @@ function detectProvider(env: Record<string, string>): ProviderConfig {
       model: env["OPENAI_MODEL"] || "gpt-4o-mini",
       maxTokens,
       baseURL: env["OPENAI_BASE_URL"],
+    };
+  }
+
+  if (isUsableOpenAIOAuthRecord(oauthRecord)) {
+    return {
+      provider: "openai-oauth",
+      model: env["OPENAI_MODEL"] || "gpt-5.4-mini",
+      maxTokens,
     };
   }
 
@@ -208,7 +220,8 @@ export function detectLlmProviderKind(): "llm" | "noop" {
     hasRealValue(env["OPENROUTER_API_KEY"]) ||
     hasRealValue(env["MINIMAX_API_KEY"]) ||
     (hasRealValue(env["OPENAI_API_KEY"]) &&
-      env["OPENAI_API_KEY_FOR_LLM"] !== "false")
+      env["OPENAI_API_KEY_FOR_LLM"] !== "false") ||
+    isUsableOpenAIOAuthRecord(new OpenAIOAuthStore().loadSync())
   ) {
     return "llm";
   }
@@ -368,6 +381,7 @@ function hasLLMProviderConfigured(env: Record<string, string | undefined>): bool
       env["GEMINI_API_KEY"] ||
       env["GOOGLE_API_KEY"] ||
       env["MINIMAX_API_KEY"] ||
+      isUsableOpenAIOAuthRecord(new OpenAIOAuthStore().loadSync()) ||
       env["OPENAI_BASE_URL"] ||
       provider === "agent-sdk",
   );
@@ -419,6 +433,7 @@ const VALID_PROVIDERS = new Set([
   "agent-sdk",
   "minimax",
   "openai",
+  "openai-oauth",
 ]);
 
 export function loadFallbackConfig(): FallbackConfig {

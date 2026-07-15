@@ -4,6 +4,7 @@ export function fetchWithTimeout(
   url: string,
   init: RequestInit,
   timeoutMs?: number,
+  fetchImpl: typeof fetch = fetch,
 ): Promise<Response> {
   const parsed =
     timeoutMs ??
@@ -15,5 +16,5 @@ export function fetchWithTimeout(
     ? AbortSignal.any([init.signal, ctl.signal])
     : ctl.signal;
   const t = setTimeout(() => ctl.abort(), ms);
-  return fetch(url, { ...init, signal }).finally(() => clearTimeout(t));
+  return fetchImpl(url, { ...init, signal }).finally(() => clearTimeout(t));
 }

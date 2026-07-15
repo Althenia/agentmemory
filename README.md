@@ -1229,6 +1229,7 @@ agentmemory auto-detects from your environment. By default, no LLM calls are mad
 | Gemini | `GEMINI_API_KEY` | Also enables embeddings |
 | OpenRouter | `OPENROUTER_API_KEY` | Any model |
 | OpenAI API | `OPENAI_API_KEY` | Default `gpt-4o-mini`, override with `OPENAI_MODEL` |
+| **ChatGPT Plus/Pro subscription (experimental)** | `agentmemory login openai` | LLM-only; uses `gpt-5.4` or `gpt-5.4-mini`; embeddings remain unchanged |
 | **Local (Ollama / LM Studio / vLLM / llama.cpp)** | `OPENAI_API_KEY=local` + `OPENAI_BASE_URL=http://localhost:11434/v1` (Ollama) or `http://localhost:1234/v1` (LM Studio) + `OPENAI_MODEL=<your model>` | Anything OpenAI-API-compatible. Zero cost, runs on your hardware. See [Local models](#local-models-ollama-lm-studio-vllm) below. |
 | Claude subscription fallback | `AGENTMEMORY_ALLOW_AGENT_SDK=true` | Opt-in only. Spawns `@anthropic-ai/claude-agent-sdk` sessions — used to cause unbounded Stop-hook recursion so it is no longer the default. |
 
@@ -1352,6 +1353,19 @@ taskkill /F /PID <pid>
 Put agentmemory runtime configuration in `~/.agentmemory/.env` instead of exporting variables in every shell. If the viewer shows a setup hint like `export ANTHROPIC_API_KEY=...`, copy it into this file as `ANTHROPIC_API_KEY=...` without the `export` prefix, then restart agentmemory.
 
 Process environment variables still work and take precedence over values in the file.
+
+### OpenAI subscription login (experimental)
+
+Use a ChatGPT Plus or Pro subscription for AgentMemory's LLM compression, summaries, and consolidation:
+
+```bash
+agentmemory login openai
+agentmemory logout openai
+```
+
+Credentials are stored only in `~/.agentmemory/openai-oauth.json` with restricted file permissions. They are never written to `.env`, environment variables, logs, REST responses, or MCP output. A real `OPENAI_API_KEY` remains the preferred OpenAI LLM credential; set `OPENAI_API_KEY_FOR_LLM=false` to use the subscription login for LLM work while retaining the API key for embeddings. OAuth does not enable OpenAI embeddings.
+
+The subscription transport is experimental and may change upstream. If a session expires, run `agentmemory login openai` again.
 
 On Windows, the same file lives at `%USERPROFILE%\.agentmemory\.env`:
 

@@ -141,4 +141,31 @@ describe("observe implicit session create (#638)", () => {
     expect(session.observationCount).toBe(8);
     expect(session.updatedAt).toBeTruthy();
   });
+
+  it("keeps distinct prompt submissions in the same session", async () => {
+    const { registerObserveFunction } = await import("../src/functions/observe.js");
+    const { DedupMap } = await import("../src/functions/dedup.js");
+    const sdk = mockSdk();
+    const kv = mockKV();
+    const dedup = new DedupMap();
+
+    try {
+      registerObserveFunction(sdk as never, kv as never, dedup);
+
+      for (const prompt of ["remember alpha", "remember beta"]) {
+        await sdk.trigger("mem::observe", {
+          sessionId: "ses_distinct_prompts",
+          project: "/home/user/myrepo",
+          cwd: "/home/user/myrepo",
+          hookType: "prompt_submit",
+          timestamp: new Date().toISOString(),
+          data: { prompt },
+        });
+      }
+
+      expect(kv.store.get("mem:obs:ses_distinct_prompts")?.size).toBe(2);
+    } finally {
+      dedup.stop();
+    }
+  });
 });

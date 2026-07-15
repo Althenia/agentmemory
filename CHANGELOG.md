@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Experimental ChatGPT Plus/Pro OAuth for LLM features** — `agentmemory login openai` and `agentmemory logout openai` use PKCE with protected local credentials, preserve API-key precedence, and leave OpenAI embeddings unchanged.
+
 ## [0.9.27] — 2026-06-07
 
 Wave release closing several breaking regressions reported against v0.9.26, plus an agent-scope isolation security fix, an iii version-pin audit fix, and a benchmark scorecard correction. No breaking changes; drop-in upgrade.

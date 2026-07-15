@@ -61,6 +61,7 @@ import { setBootVerbose } from "./logger.js";
 import { VERSION } from "./version.js";
 import { getAllTools, ESSENTIAL_TOOLS } from "./mcp/tools-registry.js";
 import { knownAgents } from "./cli/connect/index.js";
+import { runOpenAILogin, runOpenAILogout } from "./cli/openai-auth.js";
 
 const ALL_TOOLS_COUNT = getAllTools().length;
 const CORE_TOOLS_COUNT = getAllTools().filter((t) => ESSENTIAL_TOOLS.has(t.name)).length;
@@ -185,6 +186,9 @@ Commands:
   import-jsonl [p]   Import Claude Code JSONL transcripts (default: ~/.claude/projects)
                      --max-files <N> | --max-files=<N>: override scan cap (default 200, max 1000;
                      out-of-range is rejected; for trees >1000 files, batch by subdirectory)
+  login openai       Sign in with a ChatGPT Plus/Pro subscription (experimental)
+                     --headless uses device authorization (works without localhost:1455)
+  logout openai      Remove the local ChatGPT subscription credentials
 
 Options:
   --help, -h         Show this help
@@ -2983,6 +2987,8 @@ const commands: Record<string, () => Promise<void>> = {
   remove: runRemove,
   mcp: runMcp,
   "import-jsonl": runImportJsonl,
+  login: () => runOpenAILogin(args.slice(1)),
+  logout: () => runOpenAILogout(args.slice(1)),
 };
 
 const handler = commands[args[0] ?? ""] ?? main;

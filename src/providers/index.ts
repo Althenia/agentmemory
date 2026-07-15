@@ -8,6 +8,7 @@ import { AnthropicProvider } from "./anthropic.js";
 import { MinimaxProvider } from "./minimax.js";
 import { NoopProvider } from "./noop.js";
 import { OpenAIProvider } from "./openai.js";
+import { OpenAIOAuthProvider } from "./openai-oauth.js";
 import { OpenRouterProvider } from "./openrouter.js";
 import { ResilientProvider } from "./resilient.js";
 import { FallbackChainProvider } from "./fallback-chain.js";
@@ -36,6 +37,8 @@ function defaultModelFor(providerType: ProviderConfig["provider"]): string {
   switch (providerType) {
     case "openai":
       return getEnvVar("OPENAI_MODEL") || "gpt-4o-mini";
+    case "openai-oauth":
+      return getEnvVar("OPENAI_MODEL") || "gpt-5.4-mini";
     case "anthropic":
       return getEnvVar("ANTHROPIC_MODEL") || "claude-sonnet-4-20250514";
     case "gemini":
@@ -143,6 +146,8 @@ function createBaseProvider(config: ProviderConfig): MemoryProvider {
         config.baseURL,
       );
     }
+    case "openai-oauth":
+      return new OpenAIOAuthProvider(config.model, config.maxTokens);
     case "noop":
       return new NoopProvider();
     case "agent-sdk":
