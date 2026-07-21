@@ -14,7 +14,11 @@ import {
   buildCompressionPrompt,
 } from "../prompts/compression.js";
 import { VISION_DESCRIPTION_PROMPT } from "../prompts/vision.js";
-import { getXmlTag, getXmlChildren } from "../prompts/xml.js";
+import {
+  getXmlTag,
+  getXmlChildren,
+  normalizeXmlResponse,
+} from "../prompts/xml.js";
 import { getSearchIndex, vectorIndexAddGuarded } from "./search.js";
 import { CompressOutputSchema } from "../eval/schemas.js";
 import { validateOutput } from "../eval/validator.js";
@@ -44,22 +48,23 @@ const VALID_TYPES = new Set<string>([
 function parseCompressionXml(
   xml: string,
 ): Omit<CompressedObservation, "id" | "sessionId" | "timestamp"> | null {
-  const rawType = getXmlTag(xml, "type");
-  const title = getXmlTag(xml, "title");
+  const normalized = normalizeXmlResponse(xml);
+  const rawType = getXmlTag(normalized, "type");
+  const title = getXmlTag(normalized, "title");
   if (!rawType || !title) return null;
   const type = VALID_TYPES.has(rawType) ? rawType : "other";
 
   return {
     type: type as ObservationType,
     title,
-    subtitle: getXmlTag(xml, "subtitle") || undefined,
-    facts: getXmlChildren(xml, "facts", "fact"),
-    narrative: getXmlTag(xml, "narrative"),
-    concepts: getXmlChildren(xml, "concepts", "concept"),
-    files: getXmlChildren(xml, "files", "file"),
+    subtitle: getXmlTag(normalized, "subtitle") || undefined,
+    facts: getXmlChildren(normalized, "facts", "fact"),
+    narrative: getXmlTag(normalized, "narrative"),
+    concepts: getXmlChildren(normalized, "concepts", "concept"),
+    files: getXmlChildren(normalized, "files", "file"),
     importance: Math.max(
       1,
-      Math.min(10, parseInt(getXmlTag(xml, "importance") || "5", 10) || 5),
+      Math.min(10, parseInt(getXmlTag(normalized, "importance") || "5", 10) || 5),
     ),
   };
 }

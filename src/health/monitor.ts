@@ -4,6 +4,50 @@ import type { StateKV } from "../state/kv.js";
 import { KV } from "../state/schema.js";
 import { evaluateHealth } from "./thresholds.js";
 
+const RSS_BUDGET_BYTES = 512 * 1024 * 1024;
+
+type RssBudgetResult = Pick<HealthSnapshot, "status" | "alerts">;
+
+export function createRssBudgetTracker(
+  collectGarbage: (() => void) | undefined = global.gc,
+): (rss: number) => RssBudgetResult {
+  let breaches = 0;
+  let postGcBreaches = 0;
+  let gcRequested = false;
+
+  return (rss) => {
+    if (rss <= RSS_BUDGET_BYTES) {
+      breaches = 0;
+      postGcBreaches = 0;
+      gcRequested = false;
+      return { status: "healthy", alerts: [] };
+    }
+
+    breaches++;
+    if (breaches === 1) return { status: "healthy", alerts: [] };
+
+    if (!gcRequested) {
+      gcRequested = true;
+      if (collectGarbage) {
+        collectGarbage();
+        return {
+          status: "degraded",
+          alerts: ["rss_warn_512mb", "rss_gc_attempted_512mb"],
+        };
+      }
+      return {
+        status: "degraded",
+        alerts: ["rss_warn_512mb", "rss_gc_unavailable_512mb"],
+      };
+    }
+
+    postGcBreaches++;
+    return postGcBreaches >= 3
+      ? { status: "critical", alerts: ["rss_critical_512mb"] }
+      : { status: "degraded", alerts: ["rss_warn_512mb"] };
+  };
+}
+
 export function registerHealthMonitor(
   sdk: ISdk,
   kv: StateKV,
@@ -11,6 +55,7 @@ export function registerHealthMonitor(
   let connectionState = "connected";
   let prevCpuUsage = process.cpuUsage();
   let prevCpuTime = Date.now();
+  const evaluateRssBudget = createRssBudgetTracker();
 
   if (typeof sdk.on === "function") {
     sdk.on("connection_state", (state?: unknown) => {
@@ -88,6 +133,14 @@ export function registerHealthMonitor(
     snapshot.status = evaluated.status;
     snapshot.alerts = evaluated.alerts;
     snapshot.notes = evaluated.notes;
+    const rssBudget = evaluateRssBudget(snapshot.memory.rss);
+    snapshot.alerts.push(...rssBudget.alerts);
+    if (
+      rssBudget.status === "critical" ||
+      (rssBudget.status === "degraded" && snapshot.status === "healthy")
+    ) {
+      snapshot.status = rssBudget.status;
+    }
 
     await kv.set(KV.health, "latest", snapshot).catch(() => {});
     return snapshot;

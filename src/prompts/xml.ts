@@ -1,5 +1,15 @@
 const VALID_TAG = /^[a-zA-Z_][a-zA-Z0-9_-]*$/;
 
+export function normalizeXmlResponse(xml: string): string {
+  const unfenced = xml.replace(/```\s*xml\s*\n?|```/gi, "");
+  const decoded = unfenced.replace(/&lt;/gi, "<").replace(/&gt;/gi, ">");
+  const start = decoded.indexOf("<observation>");
+  const end = decoded.indexOf("</observation>");
+  return start >= 0 && end >= start
+    ? decoded.slice(start, end + "</observation>".length)
+    : decoded;
+}
+
 export function getXmlTag(xml: string, tag: string): string {
   if (!VALID_TAG.test(tag)) return "";
   const match = xml.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`));

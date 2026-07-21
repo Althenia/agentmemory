@@ -68,10 +68,14 @@ export function registerObserveFunction(
             ? (payload.data as Record<string, unknown>)
             : {};
         const toolName = (d["tool_name"] as string) || payload.hookType;
+        const dedupInput =
+          payload.hookType === "prompt_submit"
+            ? d["prompt"]
+            : d["tool_input"];
         dedupHash = dedupMap.computeHash(
           payload.sessionId,
           toolName,
-          d["tool_input"],
+          dedupInput,
         );
         if (dedupMap.isDuplicate(dedupHash)) {
           return { deduplicated: true, sessionId: payload.sessionId };

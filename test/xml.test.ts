@@ -1,5 +1,16 @@
 import { describe, it, expect } from 'vitest'
-import { getXmlTag, getXmlChildren } from '../src/prompts/xml.js'
+import { getXmlTag, getXmlChildren, normalizeXmlResponse } from '../src/prompts/xml.js'
+
+describe('normalizeXmlResponse', () => {
+  it('normalizes fenced prose-wrapped escaped XML', () => {
+    const xml = 'Reply:\n```xml\n&lt;observation&gt;\n&lt;type&gt;file_read&lt;/type&gt;\n&lt;title&gt;Read file&lt;/title&gt;\n&lt;/observation&gt;\n```\nDone'
+
+    const normalized = normalizeXmlResponse(xml)
+
+    expect(getXmlTag(normalized, 'type')).toBe('file_read')
+    expect(getXmlTag(normalized, 'title')).toBe('Read file')
+  })
+})
 
 describe('getXmlTag', () => {
   it('extracts simple tag content', () => {
