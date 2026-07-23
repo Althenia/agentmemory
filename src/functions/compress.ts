@@ -83,6 +83,13 @@ export function registerCompressFunction(
     }) => {
       const startMs = Date.now();
 
+      if (provider.name === "noop") {
+        logger.info("Compression skipped — no LLM provider configured", {
+          obsId: data.observationId,
+        });
+        return { success: false, error: "no_provider" };
+      }
+
       let imageDescription: string | undefined;
       const hasImage = data.raw.modality === "image" || data.raw.modality === "mixed";
 

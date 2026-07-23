@@ -160,6 +160,51 @@ describe("mem::observe auto-compress gate (#138)", () => {
     const compressCalls = sdk.triggered.filter((t) => t.id === "mem::compress");
     expect(compressCalls).toHaveLength(0);
   });
+
+  it("falls back to synthetic compression when no LLM provider is available", async () => {
+    process.env["AGENTMEMORY_AUTO_COMPRESS"] = "true";
+    const { registerObserveFunction } = await import(
+      "../src/functions/observe.js"
+    );
+    const sdk = mockSdk();
+    const kv = mockKV();
+    registerObserveFunction(sdk as never, kv as never, undefined, undefined, false);
+
+    const payload = validPayload();
+    await sdk.trigger("mem::observe", payload);
+
+    expect(sdk.triggered.filter((t) => t.id === "mem::compress")).toHaveLength(0);
+    expect(kv.store.get(`mem:obs:${payload.sessionId}`)?.size).toBe(1);
+  });
+});
+
+describe("mem::compress provider guard", () => {
+  it("returns no_provider without calling a noop provider", async () => {
+    const [{ registerCompressFunction }, { NoopProvider }] = await Promise.all([
+      import("../src/functions/compress.js"),
+      import("../src/providers/noop.js"),
+    ]);
+    const sdk = mockSdk();
+    const kv = mockKV();
+    const provider = new NoopProvider();
+    const compress = vi.spyOn(provider, "compress");
+    registerCompressFunction(sdk as never, kv as never, provider);
+
+    const result = await sdk.trigger("mem::compress", {
+      observationId: "obs_no_provider",
+      sessionId: "ses_test",
+      raw: {
+        id: "obs_no_provider",
+        sessionId: "ses_test",
+        hookType: "post_tool_use",
+        timestamp: new Date().toISOString(),
+        raw: {},
+      },
+    });
+
+    expect(result).toEqual({ success: false, error: "no_provider" });
+    expect(compress).not.toHaveBeenCalled();
+  });
 });
 
 describe("buildSyntheticCompression", () => {

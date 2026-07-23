@@ -40,6 +40,7 @@ export function registerObserveFunction(
   kv: StateKV,
   dedupMap?: DedupMap,
   maxObservationsPerSession?: number,
+  autoCompressEnabled = isAutoCompressEnabled(),
 ): void {
   sdk.registerFunction("mem::observe", 
     async (payload: HookPayload) => {
@@ -288,7 +289,7 @@ export function registerObserveFunction(
         // Default path: build a zero-LLM synthetic compression so recall
         // and BM25 search still work without burning the user's Claude
         // token allocation on every tool invocation.
-        if (isAutoCompressEnabled()) {
+        if (autoCompressEnabled) {
           await sdk.trigger({
             function_id: "mem::compress",
             payload: {

@@ -166,6 +166,8 @@ async function main() {
     fallbackConfig.providers.length > 0
       ? createFallbackProvider(config.provider, fallbackConfig)
       : createProvider(config.provider);
+  const autoCompressEnabled =
+    isAutoCompressEnabled() && provider.name !== "noop";
 
   const embeddingProvider = createEmbeddingProvider();
   const imageEmbeddingProvider = createImageEmbeddingProvider();
@@ -233,7 +235,13 @@ async function main() {
   initMetrics(meterAccessor as ((name: string) => import("@opentelemetry/api").Meter) | undefined);
 
   registerPrivacyFunction(sdk);
-  registerObserveFunction(sdk, kv, dedupMap, config.maxObservationsPerSession);
+  registerObserveFunction(
+    sdk,
+    kv,
+    dedupMap,
+    config.maxObservationsPerSession,
+    autoCompressEnabled,
+  );
   registerImageQuotaCleanup(sdk, kv);
   registerVisionSearchFunctions(sdk, kv, imageEmbeddingProvider);
   if (isSlotsEnabled()) {
@@ -274,9 +282,13 @@ async function main() {
   registerConsolidationPipelineFunction(sdk, kv, provider);
   bootLog(`Consolidation pipeline: registered (CONSOLIDATION_ENABLED=${isConsolidationEnabled() ? "true" : "false"})`);
 
-  if (isAutoCompressEnabled()) {
+  if (autoCompressEnabled) {
     bootLog(
       `WARNING: AGENTMEMORY_AUTO_COMPRESS=true — every PostToolUse observation will be sent to your LLM provider for compression. This spends API tokens proportional to your session tool-use frequency. Set AGENTMEMORY_AUTO_COMPRESS=false to disable.`,
+    );
+  } else if (isAutoCompressEnabled()) {
+    bootLog(
+      `Auto-compress: synthetic fallback — AGENTMEMORY_AUTO_COMPRESS=true but no LLM provider is configured.`,
     );
   } else {
     bootLog(
