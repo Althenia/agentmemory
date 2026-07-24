@@ -50,7 +50,7 @@
   <picture><source media="(prefers-color-scheme: dark)" srcset="assets/tags/light/stat-tools.svg"><img src="assets/tags/stat-tools.svg" alt="53 MCP tools" height="38" /></picture>
   <picture><source media="(prefers-color-scheme: dark)" srcset="assets/tags/light/stat-hooks.svg"><img src="assets/tags/stat-hooks.svg" alt="12 auto hooks" height="38" /></picture>
   <picture><source media="(prefers-color-scheme: dark)" srcset="assets/tags/light/stat-deps.svg"><img src="assets/tags/stat-deps.svg" alt="0 external DBs" height="38" /></picture>
-  <picture><source media="(prefers-color-scheme: dark)" srcset="assets/tags/light/stat-tests.svg"><img src="assets/tags/stat-tests.svg" alt="1,428+ tests passing" height="38" /></picture>
+  <picture><source media="(prefers-color-scheme: dark)" srcset="assets/tags/light/stat-tests.svg"><img src="assets/tags/stat-tests.svg" alt="1,540 tests passing" height="38" /></picture>
 </p>
 
 <p align="center">
@@ -705,7 +705,7 @@ Worked example: [`examples/python/`](examples/python/) (quickstart + observation
 
 ```bash
 git clone https://github.com/rohitg00/agentmemory.git && cd agentmemory
-npm install && npm run build && npm start
+pnpm install --frozen-lockfile && pnpm run build && pnpm start
 ```
 
 This starts agentmemory with a local `iii-engine` if `iii` is already installed, or falls back to Docker Compose if Docker is available. REST, streams, and the viewer bind to `127.0.0.1` by default.
@@ -1201,7 +1201,7 @@ Full registry: [workers.iii.dev](https://workers.iii.dev). Every worker there co
 | Prometheus / Grafana | iii OTEL + health monitor |
 | Custom plugin systems | `iii worker add <name>` |
 
-**175 source files · ~39,200 LOC · 1,428+ tests · 261 functions · 52 KV scopes** — all on three primitives. No `agentmemory plugin install`. The plugin system is iii itself.
+**175 source files · ~39,200 LOC · 1,540 tests · 261 functions · 52 KV scopes** — all on three primitives. No `agentmemory plugin install`. The plugin system is iii itself.
 
 ---
 
@@ -1505,7 +1505,7 @@ Create `~/.agentmemory/.env`:
 
 <h2 id="api"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/tags/light/section-api.svg"><img src="assets/tags/section-api.svg" alt="API" height="32" /></picture></h2>
 
-128 endpoints on port `3111`. The REST API binds to `127.0.0.1` by default. Protected endpoints require `Authorization: Bearer <secret>` when `AGENTMEMORY_SECRET` is set, and mesh sync endpoints require `AGENTMEMORY_SECRET` on both peers.
+135 endpoints on port `3111`. The REST API binds to `127.0.0.1` by default. Protected endpoints require `Authorization: Bearer <secret>` when `AGENTMEMORY_SECRET` is set, and mesh sync endpoints require `AGENTMEMORY_SECRET` on both peers.
 
 <details>
 <summary>Key endpoints</summary>
@@ -1525,6 +1525,7 @@ Create `~/.agentmemory/.env`:
 | `GET` | `/agentmemory/export` | Export all data |
 | `POST` | `/agentmemory/import` | Import from JSON |
 | `POST` | `/agentmemory/graph/query` | Knowledge graph query |
+| `POST` | `/agentmemory/graph/derived-index/v2/recover` | Offline stale lifecycle recovery |
 | `POST` | `/agentmemory/team/share` | Share with team |
 | `GET` | `/agentmemory/audit` | Audit trail |
 
@@ -1532,15 +1533,34 @@ Full endpoint list: [`src/triggers/api.ts`](src/triggers/api.ts)
 
 </details>
 
+### Derived-index v2 recovery contract
+
+Lifecycle calls are serialized by one in-process queue. iii StateModule does not expose compare-and-swap, so this is not cross-process synchronization. Run migration and recovery with exactly one AgentMemory process against the state store, stop canonical write traffic first, and do not run another worker or recovery client concurrently.
+
+Set `AGENTMEMORY_OFFLINE_MAINTENANCE=true` for that isolated process. The mode requires `AGENTMEMORY_SECRET`, keeps read-only BM25/vector index loading and all authenticated v2 lifecycle calls available even when `GRAPH_EXTRACTION_ENABLED=false`, and suppresses event subscribers, health writes, mutation timers, and index persistence writes during startup and shutdown. It rejects invalid boolean values, `GRAPH_EXTRACTION_ENABLED=true`, and explicitly enabled `AUTO_FORGET_ENABLED`, `LESSON_DECAY_ENABLED`, `INSIGHT_DECAY_ENABLED`, or `CONSOLIDATION_ENABLED`. This is not a global read-only mode: lifecycle begin/page/activate/rollback/recover intentionally write derived-index state, so keep all non-lifecycle traffic stopped.
+
+`POST /agentmemory/graph/derived-index/v2/status` returns the maintenance `ownerToken` plus inflight `ownerToken`, `operationToken`, `startedAt`, and `expiresAt` fields. Recovery requires `AGENTMEMORY_SECRET` authentication and accepts only this payload:
+
+```json
+{
+  "minimumAgeSeconds": 60,
+  "expectedOwnerToken": "<inflight ownerToken>",
+  "expectedOperationToken": "<inflight operationToken>",
+  "expectedMarkerToken": "<maintenance ownerToken>"
+}
+```
+
+`minimumAgeSeconds` is a required positive integer. Supply the inflight owner/operation token pair to recover exactly one expired row, `expectedMarkerToken` to remove an old orphan marker, or both when recovering the final row and its marker. Omit the pair or marker only when that target is not being recovered. Unknown fields, partial token pairs, non-expired rows, operations still live in this process, token mismatches, young markers, and markers with other inflight rows are rejected. Recovery never deletes canonical records, generation metadata, or generation index data.
+
 ---
 
 <h2 id="development"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/tags/light/section-development.svg"><img src="assets/tags/section-development.svg" alt="Development" height="32" /></picture></h2>
 
 ```bash
-npm run dev               # Hot reload
-npm run build             # Production build
-npm test                  # 1,428+ tests
-npm run test:integration  # API tests (requires running services)
+pnpm run dev               # Hot reload
+pnpm run build             # Production build
+pnpm test                  # 1,540 tests
+pnpm run test:integration  # API tests (requires running services)
 ```
 
 **Prerequisites:** Node.js >= 20, [iii-engine](https://iii.dev/docs) or Docker

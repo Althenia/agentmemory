@@ -36,6 +36,10 @@ const shared = {
       "@anthropic-ai/claude-agent-sdk",
       "@anthropic-ai/sdk",
     ],
+    alwaysBundle: ["iii-sdk", /^@iii-dev\/helpers(?:\/|$)/],
+    dts: {
+      alwaysBundle: ["iii-sdk", /^@iii-dev\/helpers(?:\/|$)/],
+    },
   },
   // Each entry is its own build, so the per-entry dts/deps timing notice
   // fires ~30 times and drowns the real output. It is informational only.

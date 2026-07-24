@@ -12,6 +12,7 @@ import { isSlotsEnabled, isReflectEnabled } from "../functions/slots.js";
 import { renderViewerDocument } from "../viewer/document.js";
 import { getBoundViewerPort, getViewerSkipped } from "../viewer/server.js";
 import { MAX_FILES_UPPER_BOUND } from "../functions/replay.js";
+import { registerDerivedIndexLifecycleFunctions } from "../functions/graph.js";
 import { logger } from "../logger.js";
 import {
   isGraphExtractionEnabled,
@@ -249,7 +250,7 @@ export function registerApiTriggers(
   });
 
   sdk.registerFunction("api::health", 
-    async (req: ApiRequest): Promise<Response> => {
+    async (): Promise<Response> => {
       const health = await getLatestHealth(kv);
       const functionMetrics = metricsStore ? await metricsStore.getAll() : [];
       const circuitBreaker =
@@ -285,7 +286,7 @@ export function registerApiTriggers(
 
   sdk.registerFunction("api::observe",
     async (req: ApiRequest<HookPayload>): Promise<Response> => {
-      const body = (req.body ?? {}) as Record<string, unknown>;
+      const body: Partial<HookPayload> = req.body ?? {};
       const hookType = asNonEmptyString(body.hookType);
       const sessionId = asNonEmptyString(body.sessionId);
       const project = asNonEmptyString(body.project);
@@ -499,7 +500,9 @@ export function registerApiTriggers(
   });
 
   sdk.registerFunction("api::replay::load",
-    async (req: ApiRequest): Promise<Response> => {
+    async (
+      req: ApiRequest<{ name?: unknown; steps?: unknown }>,
+    ): Promise<Response> => {
       const authErr = checkAuth(req, secret);
       if (authErr) return authErr;
       const sessionId = asNonEmptyString(req.query_params?.["sessionId"]);
@@ -1498,6 +1501,264 @@ export function registerApiTriggers(
     config: { api_path: "/agentmemory/graph/stats", http_method: "GET" },
   });
 
+  sdk.registerFunction("api::graph-derived-index-backfill",
+    async (req: ApiRequest<Record<string, unknown>>): Promise<Response> => {
+      const authErr = checkAuth(req, secret);
+      if (authErr) return authErr;
+      const body = req.body ?? {};
+      const allowedKinds = new Set([
+        "graph-nodes",
+        "graph-edges",
+        "memories",
+        "observations",
+      ]);
+      const kind = typeof body.kind === "string" ? body.kind : undefined;
+      const sessionId =
+        typeof body.sessionId === "string" && body.sessionId.trim()
+          ? body.sessionId.trim()
+          : undefined;
+      const cursor = typeof body.cursor === "string" ? body.cursor : undefined;
+      const limit = parseOptionalPositiveInt(body.limit);
+      if (
+        !kind ||
+        !allowedKinds.has(kind) ||
+        (kind === "observations" && !sessionId) ||
+        (body.cursor !== undefined && cursor === undefined) ||
+        limit === null ||
+        (limit !== undefined && limit > 128)
+      ) {
+        return {
+          status_code: 400,
+          body: {
+            error:
+              "kind must be graph-nodes, graph-edges, memories, or observations; " +
+              "observations requires sessionId; cursor must be a string; " +
+              "limit must be an integer from 1 through 128",
+          },
+        };
+      }
+      try {
+        const result = await sdk.trigger({
+          function_id: "mem::derived-index-backfill",
+          payload: { kind, sessionId, cursor, limit },
+        });
+        if (
+          typeof result === "object" &&
+          result !== null &&
+          "success" in result &&
+          result.success === false
+        ) {
+          return {
+            status_code: 500,
+            body: {
+              error:
+                "error" in result && typeof result.error === "string"
+                  ? result.error
+                  : "Derived-index backfill failed",
+            },
+          };
+        }
+        return { status_code: 200, body: result };
+      } catch (err) {
+        return {
+          status_code: 500,
+          body: { error: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    },
+  );
+  sdk.registerTrigger({
+    type: "http",
+    function_id: "api::graph-derived-index-backfill",
+    config: {
+      api_path: "/agentmemory/graph/derived-index/backfill",
+      http_method: "POST",
+      middleware_function_ids: ["middleware::api-auth"],
+    },
+  });
+
+  registerDerivedIndexLifecycleFunctions(sdk, kv);
+  const derivedLifecycleOperations = [
+    {
+      operation: "begin",
+      api_path: "/agentmemory/graph/derived-index/v2/begin",
+    },
+    {
+      operation: "page",
+      api_path: "/agentmemory/graph/derived-index/v2/page",
+    },
+    {
+      operation: "status",
+      api_path: "/agentmemory/graph/derived-index/v2/status",
+    },
+    {
+      operation: "activate",
+      api_path: "/agentmemory/graph/derived-index/v2/activate",
+    },
+    {
+      operation: "rollback",
+      api_path: "/agentmemory/graph/derived-index/v2/rollback",
+    },
+    {
+      operation: "recover",
+      api_path: "/agentmemory/graph/derived-index/v2/recover",
+    },
+  ] as const;
+  for (const { operation, api_path } of derivedLifecycleOperations) {
+    const apiFunctionId = `api::graph-derived-index-v2-${operation}`;
+    sdk.registerFunction(apiFunctionId,
+      async (req: ApiRequest<Record<string, unknown>>): Promise<Response> => {
+        const secretErr = requireConfiguredSecret(
+          secret,
+          "Derived-index migration",
+        );
+        if (secretErr) return secretErr;
+        const authErr = checkAuth(req, secret);
+        if (authErr) return authErr;
+        const body = req.body ?? {};
+        const allowedFields = operation === "page"
+          ? new Set(["generation", "limit"])
+          : operation === "recover"
+            ? new Set([
+                "minimumAgeSeconds",
+                "expectedOwnerToken",
+                "expectedOperationToken",
+                "expectedMarkerToken",
+              ])
+            : new Set(["generation"]);
+        if (Object.keys(body).some((field) => !allowedFields.has(field))) {
+          return {
+            status_code: 400,
+            body: { error: `unknown field for ${operation}` },
+          };
+        }
+        const generation = operation !== "recover" &&
+            typeof body.generation === "string"
+          ? body.generation.trim()
+          : undefined;
+        const generationSupplied = Object.hasOwn(body, "generation");
+        if (
+          operation !== "recover" &&
+          ((operation !== "status" && !generation) ||
+            (generationSupplied &&
+              (!generation || !/^[A-Za-z0-9._-]{1,64}$/.test(generation))))
+        ) {
+          return {
+            status_code: 400,
+            body: { error: "generation is required and must be a valid identifier" },
+          };
+        }
+        const limit = operation === "page" ? body.limit : undefined;
+        if (
+          limit !== undefined &&
+          (typeof limit !== "number" ||
+            !Number.isInteger(limit) ||
+            limit < 1 ||
+            limit > 128)
+        ) {
+          return {
+            status_code: 400,
+            body: { error: "limit must be an integer from 1 through 128" },
+          };
+        }
+        const minimumAgeSeconds = operation === "recover"
+          ? body.minimumAgeSeconds
+          : undefined;
+        const expectedOwnerToken = operation === "recover"
+          ? body.expectedOwnerToken
+          : undefined;
+        const expectedOperationToken = operation === "recover"
+          ? body.expectedOperationToken
+          : undefined;
+        const expectedMarkerToken = operation === "recover"
+          ? body.expectedMarkerToken
+          : undefined;
+        const validRecoveryToken = (value: unknown): value is string =>
+          typeof value === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(value);
+        const hasOwner = expectedOwnerToken !== undefined;
+        const hasOperation = expectedOperationToken !== undefined;
+        if (
+          operation === "recover" &&
+          (typeof minimumAgeSeconds !== "number" ||
+            !Number.isInteger(minimumAgeSeconds) ||
+            minimumAgeSeconds < 1 ||
+            hasOwner !== hasOperation ||
+            (hasOwner && !validRecoveryToken(expectedOwnerToken)) ||
+            (hasOperation && !validRecoveryToken(expectedOperationToken)) ||
+            (expectedMarkerToken !== undefined &&
+              !validRecoveryToken(expectedMarkerToken)) ||
+            (!hasOwner && expectedMarkerToken === undefined))
+        ) {
+          return {
+            status_code: 400,
+            body: {
+              error:
+                "minimumAgeSeconds must be a positive integer; recovery requires a valid " +
+                "expectedOwnerToken/expectedOperationToken pair or expectedMarkerToken",
+            },
+          };
+        }
+        try {
+          const result = await sdk.trigger({
+            function_id: `mem::derived-index-v2-${operation}`,
+            payload: {
+              ...(generation !== undefined ? { generation } : {}),
+              ...(typeof limit === "number" ? { limit } : {}),
+              ...(typeof minimumAgeSeconds === "number"
+                ? { minimumAgeSeconds }
+                : {}),
+              ...(typeof expectedOwnerToken === "string"
+                ? { expectedOwnerToken }
+                : {}),
+              ...(typeof expectedOperationToken === "string"
+                ? { expectedOperationToken }
+                : {}),
+              ...(typeof expectedMarkerToken === "string"
+                ? { expectedMarkerToken }
+                : {}),
+            },
+          });
+          if (
+            result &&
+            typeof result === "object" &&
+            "success" in result &&
+            result.success === false
+          ) {
+            const statusCode = "statusCode" in result &&
+                typeof result.statusCode === "number" &&
+                result.statusCode >= 400 &&
+                result.statusCode <= 599
+              ? result.statusCode
+              : 500;
+            return {
+              status_code: statusCode,
+              body: {
+                error: "error" in result && typeof result.error === "string"
+                  ? result.error
+                  : `Derived-index ${operation} failed`,
+              },
+            };
+          }
+          return { status_code: 200, body: result };
+        } catch (err) {
+          return {
+            status_code: 500,
+            body: { error: err instanceof Error ? err.message : String(err) },
+          };
+        }
+      },
+    );
+    sdk.registerTrigger({
+      type: "http",
+      function_id: apiFunctionId,
+      config: {
+        api_path,
+        http_method: "POST",
+        middleware_function_ids: ["middleware::api-auth"],
+      },
+    });
+  }
+
   // #814: explicit snapshot rebuild endpoint. Pays the full graph
   // enumeration once and persists a top-degree subgraph + aggregate
   // counts so subsequent /graph/query and /graph/stats calls skip the
@@ -2444,7 +2705,9 @@ export function registerApiTriggers(
   });
 
   sdk.registerFunction("api::routine-create",
-    async (req: ApiRequest): Promise<Response> => {
+    async (
+      req: ApiRequest<{ name?: unknown; steps?: unknown }>,
+    ): Promise<Response> => {
       const authErr = checkAuth(req, secret);
       if (authErr) return authErr;
       if (!req.body?.name || !req.body?.steps) {

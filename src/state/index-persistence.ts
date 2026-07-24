@@ -27,6 +27,7 @@ type IndexShardManifest = {
 type IndexPersistenceOptions = {
   shardChars?: number;
   createGeneration?: () => string;
+  writesEnabled?: boolean;
 };
 
 function shardChars(options: IndexPersistenceOptions): number {
@@ -58,10 +59,11 @@ function isValidShardDescriptor(
   return (
     typeof candidate.scope === "string" &&
     candidate.scope.length > 0 &&
-    typeof candidate.key === "string" &&
-    candidate.key.length > 0 &&
-    Number.isInteger(candidate.chars) &&
-    candidate.chars >= 0
+      typeof candidate.key === "string" &&
+      candidate.key.length > 0 &&
+      typeof candidate.chars === "number" &&
+      Number.isInteger(candidate.chars) &&
+      candidate.chars >= 0
   );
 }
 
@@ -77,6 +79,7 @@ export class IndexPersistence {
   ) {}
 
   scheduleSave(): void {
+    if (this.options.writesEnabled === false) return;
     if (this.timer) clearTimeout(this.timer);
     // setTimeout discards the returned promise, so any rejection inside
     // save() would surface as unhandledRejection and crash the process
@@ -88,6 +91,7 @@ export class IndexPersistence {
   }
 
   async save(): Promise<void> {
+    if (this.options.writesEnabled === false) return;
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;

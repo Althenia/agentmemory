@@ -52,13 +52,13 @@ Out of scope:
 
 ## Supply-chain stance
 
-agentmemory ships pre-built artifacts in the npm tarball — `dist/` is bundled at publish time, not built from `node_modules` at install time. The package's runtime dependency tree is intentionally small (6 production deps: `@anthropic-ai/sdk`, `@anthropic-ai/claude-agent-sdk`, `@clack/prompts`, `dotenv`, `iii-sdk`, `zod`) plus an optional set guarded behind `optionalDependencies` for embeddings.
+agentmemory ships pre-built artifacts in the npm tarball — `dist/` is bundled at publish time, not built from `node_modules` at install time. The package's runtime dependency tree is intentionally small (6 production deps: `@anthropic-ai/sdk`, `@anthropic-ai/claude-agent-sdk`, `@clack/prompts`, `dotenv`, `picocolors`, `zod`) plus an optional set guarded behind `optionalDependencies` for embeddings. `iii-sdk` is a build-only dependency bundled into the published artifacts.
 
-**No lockfile is committed** (#540). The reasoning:
+**The pnpm lockfile is committed.** Repository builds use `pnpm-lock.yaml` as the frozen dependency graph:
 
 - The npm tarball ships pre-built `dist/` — fresh installs don't compile from source, so no lockfile is consulted at the user's install step.
-- The lockfile only affects contributor-local builds. Pinning it would shift the supply-chain attack surface from "what npm resolves today" to "what was resolved when the lockfile was last regenerated," which is a different tradeoff, not strictly better.
-- We use SemVer ranges (`^x.y.z`) on the published deps so security patches reach users without a re-release.
+- Contributors, CI, and publication jobs build and test the same resolved dependency graph.
+- Published runtime dependencies retain SemVer ranges (`^x.y.z`) so compatible security patches can reach npm consumers without a re-release.
 
 If you ship agentmemory inside a hardened pipeline that requires reproducible installs, the recommended path is:
 
@@ -66,7 +66,7 @@ If you ship agentmemory inside a hardened pipeline that requires reproducible in
 2. `npm shrinkwrap` to produce a versioned `npm-shrinkwrap.json` that travels with your deployment.
 3. Audit `node_modules/` once at that point and republish internally.
 
-CI runs `npm install --package-lock-only --legacy-peer-deps --no-audit --no-fund` then `npm ci` against that generated lockfile, so every test job builds against a fully resolved tree. The lockfile is regenerated on each CI run rather than checked in, which keeps the published tarball aligned with whatever SemVer-compatible patch level was current at release time.
+CI runs `pnpm install --frozen-lockfile` against the committed `pnpm-lock.yaml`. Dependency changes must regenerate and commit the lockfile before CI can build or test them.
 
 Supply-chain monitoring we already do:
 

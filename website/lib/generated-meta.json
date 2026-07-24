@@ -2,7 +2,7 @@
   "version": "0.9.28",
   "mcpTools": 53,
   "hooks": 12,
-  "restEndpoints": 128,
-  "testsPassing": 1428,
-  "generatedAt": "2026-07-19T10:24:26.108Z"
+  "restEndpoints": 135,
+  "testsPassing": 1540,
+  "generatedAt": "2026-07-24T04:48:56.555Z"
 }

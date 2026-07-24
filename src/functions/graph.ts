@@ -15,6 +15,17 @@ import {
 } from "../prompts/graph-extraction.js";
 import { recordAudit } from "./audit.js";
 import { logger } from "../logger.js";
+import {
+  activateDerivedIndexGeneration,
+  backfillDerivedIndexPage,
+  beginDerivedIndexGeneration,
+  DerivedIndexLifecycleConflictError,
+  getDerivedIndexGenerationStatus,
+  recoverDerivedIndexLifecycle,
+  rebuildDerivedIndexGenerationPage,
+  rollbackDerivedIndexGeneration,
+  type DerivedIndexBackfillKind,
+} from "../state/graph-derived-index.js";
 
 // #753: keep the response payload below the iii state channel ceiling.
 // 500 nodes + their incident edges hold well under the limit on the
@@ -450,11 +461,209 @@ function parseGraphXml(
   return { nodes, edges };
 }
 
+export function registerDerivedIndexLifecycleFunctions(
+  sdk: ISdk,
+  kv: StateKV,
+): void {
+  const lifecycleFailure = (err: unknown, statusCode?: number) => ({
+    success: false,
+    statusCode: statusCode ??
+      (err instanceof DerivedIndexLifecycleConflictError ? 409 : 500),
+    error: err instanceof Error ? err.message : String(err),
+  });
+  const generationFrom = (data: unknown): string | null => {
+    if (!data || typeof data !== "object") return null;
+    const generation = (data as { generation?: unknown }).generation;
+    if (typeof generation !== "string") return null;
+    const normalized = generation.trim();
+    return /^[A-Za-z0-9._-]{1,64}$/.test(normalized) ? normalized : null;
+  };
+
+  sdk.registerFunction("mem::derived-index-v2-begin", async (data: unknown) => {
+    const generation = generationFrom(data);
+    if (!generation) return lifecycleFailure(new Error("generation is required"), 400);
+    try {
+      const metadata = await beginDerivedIndexGeneration(kv, { generation });
+      return { success: true, metadata };
+    } catch (err) {
+      return lifecycleFailure(err);
+    }
+  });
+
+  sdk.registerFunction("mem::derived-index-v2-page", async (data: unknown) => {
+    const generation = generationFrom(data);
+    const limit = data && typeof data === "object"
+      ? (data as { limit?: unknown }).limit
+      : undefined;
+    if (
+      !generation ||
+      (limit !== undefined &&
+        (typeof limit !== "number" ||
+          !Number.isInteger(limit) ||
+          limit < 1 ||
+          limit > 128))
+    ) {
+      return lifecycleFailure(
+        new Error("generation is required and limit must be an integer"),
+        400,
+      );
+    }
+    try {
+      const result = await rebuildDerivedIndexGenerationPage(kv, {
+        generation,
+        ...(typeof limit === "number" ? { limit } : {}),
+      });
+      return { success: true, ...result };
+    } catch (err) {
+      return lifecycleFailure(err);
+    }
+  });
+
+  sdk.registerFunction("mem::derived-index-v2-status", async (data: unknown) => {
+    const generation = data && typeof data === "object"
+      ? (data as { generation?: unknown }).generation
+      : undefined;
+    const normalizedGeneration = typeof generation === "string"
+      ? generation.trim()
+      : undefined;
+    if (
+      generation !== undefined &&
+      (typeof generation !== "string" ||
+        (normalizedGeneration !== "" &&
+          !/^[A-Za-z0-9._-]{1,64}$/.test(normalizedGeneration ?? "")))
+    ) {
+      return lifecycleFailure(new Error("generation must be a valid identifier"), 400);
+    }
+    try {
+      const status = await getDerivedIndexGenerationStatus(kv, {
+        ...(normalizedGeneration
+          ? { generation: normalizedGeneration }
+          : {}),
+      });
+      return { success: true, ...status };
+    } catch (err) {
+      return lifecycleFailure(err);
+    }
+  });
+
+  sdk.registerFunction("mem::derived-index-v2-activate", async (data: unknown) => {
+    const generation = generationFrom(data);
+    if (!generation) return lifecycleFailure(new Error("generation is required"), 400);
+    try {
+      const active = await activateDerivedIndexGeneration(kv, { generation });
+      return { success: true, active };
+    } catch (err) {
+      return lifecycleFailure(err);
+    }
+  });
+
+  sdk.registerFunction("mem::derived-index-v2-rollback", async (data: unknown) => {
+    const generation = generationFrom(data);
+    if (!generation) return lifecycleFailure(new Error("generation is required"), 400);
+    try {
+      const active = await rollbackDerivedIndexGeneration(kv, { generation });
+      return { success: true, active };
+    } catch (err) {
+      return lifecycleFailure(err);
+    }
+  });
+
+  sdk.registerFunction("mem::derived-index-v2-recover", async (data: unknown) => {
+    if (!data || typeof data !== "object") {
+      return lifecycleFailure(new Error("recovery payload is required"), 400);
+    }
+    const payload = data as Record<string, unknown>;
+    const allowedFields = new Set([
+      "minimumAgeSeconds",
+      "expectedOwnerToken",
+      "expectedOperationToken",
+      "expectedMarkerToken",
+    ]);
+    if (Object.keys(payload).some((field) => !allowedFields.has(field))) {
+      return lifecycleFailure(new Error("unknown recovery field"), 400);
+    }
+    const minimumAgeSeconds = payload.minimumAgeSeconds;
+    const expectedOwnerToken = payload.expectedOwnerToken;
+    const expectedOperationToken = payload.expectedOperationToken;
+    const expectedMarkerToken = payload.expectedMarkerToken;
+    const validToken = (value: unknown): value is string =>
+      typeof value === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(value);
+    const hasOwner = expectedOwnerToken !== undefined;
+    const hasOperation = expectedOperationToken !== undefined;
+    if (
+      typeof minimumAgeSeconds !== "number" ||
+      !Number.isInteger(minimumAgeSeconds) ||
+      minimumAgeSeconds < 1 ||
+      (hasOwner !== hasOperation) ||
+      (hasOwner && !validToken(expectedOwnerToken)) ||
+      (hasOperation && !validToken(expectedOperationToken)) ||
+      (expectedMarkerToken !== undefined && !validToken(expectedMarkerToken)) ||
+      (!hasOwner && expectedMarkerToken === undefined)
+    ) {
+      return lifecycleFailure(
+        new Error(
+          "minimumAgeSeconds must be a positive integer; recovery requires a valid " +
+            "expectedOwnerToken/expectedOperationToken pair or expectedMarkerToken",
+        ),
+        400,
+      );
+    }
+    try {
+      const result = await recoverDerivedIndexLifecycle(kv, {
+        minimumAgeSeconds,
+        ...(typeof expectedOwnerToken === "string" ? { expectedOwnerToken } : {}),
+        ...(typeof expectedOperationToken === "string"
+          ? { expectedOperationToken }
+          : {}),
+        ...(typeof expectedMarkerToken === "string" ? { expectedMarkerToken } : {}),
+      });
+      return { success: true, ...result };
+    } catch (err) {
+      return lifecycleFailure(err);
+    }
+  });
+}
+
 export function registerGraphFunction(
   sdk: ISdk,
   kv: StateKV,
   provider: MemoryProvider,
 ): void {
+  sdk.registerFunction("mem::derived-index-backfill", async (data: {
+    kind?: DerivedIndexBackfillKind;
+    sessionId?: string;
+    cursor?: string;
+    limit?: number;
+  }) => {
+    const kinds = new Set<DerivedIndexBackfillKind>([
+      "graph-nodes",
+      "graph-edges",
+      "memories",
+      "observations",
+    ]);
+    if (!data.kind || !kinds.has(data.kind)) {
+      return {
+        success: false,
+        error:
+          "kind must be graph-nodes, graph-edges, memories, or observations",
+      };
+    }
+    try {
+      const result = await backfillDerivedIndexPage(kv, {
+        kind: data.kind,
+        ...(data.sessionId !== undefined ? { sessionId: data.sessionId } : {}),
+        ...(data.cursor !== undefined ? { cursor: data.cursor } : {}),
+        ...(data.limit !== undefined ? { limit: data.limit } : {}),
+      });
+      return { success: true, ...result };
+    } catch (err) {
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  });
+
   sdk.registerFunction("mem::graph-extract", 
     async (data: { observations: CompressedObservation[] }) => {
       if (!data.observations || data.observations.length === 0) {

@@ -685,6 +685,32 @@ describe("IndexPersistence", () => {
     expect(saved).not.toBeNull();
   });
 
+  it("loads indexes but never persists them when writes are disabled", async () => {
+    const stored = makeBm25("obs_stored", "stored auth handler");
+    await new IndexPersistence(kv as never, stored, null).save();
+    const guardedKv = {
+      ...kv,
+      set: vi.fn(kv.set),
+      delete: vi.fn(kv.delete),
+    };
+    const persistence = new IndexPersistence(
+      guardedKv as never,
+      new SearchIndex(),
+      null,
+      { writesEnabled: false },
+    );
+
+    const loaded = await persistence.load();
+    expect(loaded.bm25?.size).toBe(1);
+
+    persistence.scheduleSave();
+    await persistence.save();
+    await vi.runAllTimersAsync();
+
+    expect(guardedKv.set).not.toHaveBeenCalled();
+    expect(guardedKv.delete).not.toHaveBeenCalled();
+  });
+
   it("stop clears the pending timer", async () => {
     const bm25 = new SearchIndex();
     bm25.add(makeObs({ id: "obs_1", title: "auth handler" }));

@@ -1,5 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
-import { createRssBudgetTracker } from "../src/health/monitor.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createRssBudgetTracker,
+  registerHealthMonitor,
+} from "../src/health/monitor.js";
 
 const MEBIBYTE = 1024 * 1024;
 
@@ -50,5 +53,26 @@ describe("createRssBudgetTracker", () => {
       status: "degraded",
       alerts: ["rss_warn_512mb", "rss_gc_unavailable_512mb"],
     });
+  });
+});
+
+describe("registerHealthMonitor", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("does not start timers or write health state when disabled", () => {
+    vi.useFakeTimers();
+    const sdk = { on: vi.fn(), trigger: vi.fn() };
+    const kv = { get: vi.fn(), set: vi.fn() };
+
+    const monitor = registerHealthMonitor(sdk as never, kv as never, {
+      enabled: false,
+    });
+
+    expect(vi.getTimerCount()).toBe(0);
+    expect(sdk.trigger).not.toHaveBeenCalled();
+    expect(kv.set).not.toHaveBeenCalled();
+    monitor.stop();
   });
 });

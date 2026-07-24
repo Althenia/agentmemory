@@ -207,6 +207,67 @@ export function getEnvVar(key: string): string | undefined {
   return getMergedEnv()[key];
 }
 
+const OFFLINE_MAINTENANCE_INCOMPATIBLE_FLAGS = [
+  "GRAPH_EXTRACTION_ENABLED",
+  "AUTO_FORGET_ENABLED",
+  "LESSON_DECAY_ENABLED",
+  "INSIGHT_DECAY_ENABLED",
+  "CONSOLIDATION_ENABLED",
+] as const;
+
+export interface RuntimePolicy {
+  offlineMaintenance: boolean;
+  registerEventTriggers: boolean;
+  healthMonitorEnabled: boolean;
+  backgroundMutationTimersEnabled: boolean;
+  indexPersistenceWritesEnabled: boolean;
+}
+
+export function loadRuntimePolicy(): RuntimePolicy {
+  const env = getMergedEnv();
+  const rawMode = env["AGENTMEMORY_OFFLINE_MAINTENANCE"];
+  if (rawMode !== undefined && rawMode !== "true" && rawMode !== "false") {
+    throw new Error(
+      'AGENTMEMORY_OFFLINE_MAINTENANCE must be "true" or "false"',
+    );
+  }
+  const offlineMaintenance = rawMode === "true";
+  if (!offlineMaintenance) {
+    return {
+      offlineMaintenance: false,
+      registerEventTriggers: true,
+      healthMonitorEnabled: true,
+      backgroundMutationTimersEnabled: true,
+      indexPersistenceWritesEnabled: true,
+    };
+  }
+  if (!hasRealValue(env["AGENTMEMORY_SECRET"])) {
+    throw new Error(
+      "AGENTMEMORY_SECRET is required when AGENTMEMORY_OFFLINE_MAINTENANCE=true",
+    );
+  }
+  for (const flag of OFFLINE_MAINTENANCE_INCOMPATIBLE_FLAGS) {
+    const value = env[flag];
+    if (value !== undefined && value !== "true" && value !== "false") {
+      throw new Error(
+        `${flag} must be "true" or "false" when AGENTMEMORY_OFFLINE_MAINTENANCE=true`,
+      );
+    }
+    if (value === "true") {
+      throw new Error(
+        `${flag}=true is incompatible with AGENTMEMORY_OFFLINE_MAINTENANCE=true`,
+      );
+    }
+  }
+  return {
+    offlineMaintenance: true,
+    registerEventTriggers: false,
+    healthMonitorEnabled: false,
+    backgroundMutationTimersEnabled: false,
+    indexPersistenceWritesEnabled: false,
+  };
+}
+
 export function isDropStaleIndexEnabled(): boolean {
   return getMergedEnv()["AGENTMEMORY_DROP_STALE_INDEX"] === "true";
 }

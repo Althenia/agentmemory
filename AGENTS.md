@@ -7,7 +7,8 @@ agentmemory is a persistent memory system for AI coding agents, built on iii-eng
 - **Engine**: iii-sdk (WebSocket to iii-engine on port 49134)
 - **State**: File-based SQLite via iii-engine's StateModule (`./data/state_store.db`)
 - **Build**: TypeScript → ESM via tsdown, output to `dist/`
-- **Test**: vitest (`npm test` excludes integration tests)
+- **Test**: vitest (`pnpm test` excludes integration tests)
+- **Derived-index lifecycle safety**: v2 begin/page/status/activate/rollback/recover operations are serialized by one in-process queue. iii StateModule has no compare-and-swap; operators MUST run lifecycle and recovery with one `AGENTMEMORY_OFFLINE_MAINTENANCE=true` process, an `AGENTMEMORY_SECRET`, and no non-lifecycle traffic. The mode suppresses automatic writers but intentionally permits explicit lifecycle mutations. Marker tokens detect ownership changes but do not provide cross-process CAS.
 
 ## Consistency Rules
 
@@ -109,7 +110,7 @@ Hook scripts in `src/hooks/` are standalone Node.js scripts (no iii-sdk import).
 
 ## Testing
 
-- All tests must pass before PR: `npm test` (1,428+ tests)
+- All tests must pass before PR: `pnpm test` (1,540 tests)
 - Mock pattern: `vi.mock("iii-sdk")` with mock `sdk.trigger`, `kv.get/set/list`
 - Test files go in `test/` with `.test.ts` extension
 - Follow existing patterns in `test/crystallize.test.ts` for function tests
@@ -117,8 +118,8 @@ Hook scripts in `src/hooks/` are standalone Node.js scripts (no iii-sdk import).
 ## Current Stats (v0.9.28)
 
 - 53 MCP tools (8 visible by default, `AGENTMEMORY_TOOLS=all` for all)
-- 128 REST endpoints
+- 135 REST endpoints
 - 6 MCP resources, 3 MCP prompts
 - 12 hooks, 15 skills
 - 260+ iii functions
-- 1,428+ tests
+- 1,540 tests

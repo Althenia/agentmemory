@@ -12,6 +12,7 @@ import {
   isConsolidationEnabled,
   isContextInjectionEnabled,
   isDropStaleIndexEnabled,
+  loadRuntimePolicy,
 } from "./config.js";
 import {
   createProvider,
@@ -158,6 +159,7 @@ process.on("unhandledRejection", (reason) => {
 });
 
 async function main() {
+  const runtimePolicy = loadRuntimePolicy();
   const config = loadConfig();
   const embeddingConfig = loadEmbeddingConfig();
   const fallbackConfig = loadFallbackConfig();
@@ -193,6 +195,9 @@ async function main() {
     `REST API: http://localhost:${config.restPort}/agentmemory/*`,
   );
   bootLog(`Streams: ws://localhost:${config.streamsPort}`);
+  if (runtimePolicy.offlineMaintenance) {
+    bootLog(`Offline maintenance: automatic state writers disabled`);
+  }
 
   const sdk = registerWorker(config.engineUrl, {
     workerName: "agentmemory",
@@ -229,10 +234,10 @@ async function main() {
   setEmbeddingProvider(embeddingProvider);
 
   const meterAccessor = hasGetMeter(sdk)
-    ? (sdk.getMeter.bind(sdk) as (name: string) => unknown)
+    ? (sdk.getMeter.bind(sdk) as Parameters<typeof initMetrics>[0])
     : undefined;
 
-  initMetrics(meterAccessor as ((name: string) => import("@opentelemetry/api").Meter) | undefined);
+  initMetrics(meterAccessor);
 
   registerPrivacyFunction(sdk);
   registerObserveFunction(
@@ -379,15 +384,21 @@ async function main() {
   registerSmartSearchFunction(sdk, kv, (query, limit) =>
     hybridSearch.search(query, limit),
   );
-  registerRecentSearchesSweepFunction(sdk, kv);
+  if (runtimePolicy.backgroundMutationTimersEnabled) {
+    registerRecentSearchesSweepFunction(sdk, kv);
+  }
 
   registerApiTriggers(sdk, kv, secret, metricsStore, provider);
-  registerEventTriggers(sdk, kv);
+  if (runtimePolicy.registerEventTriggers) registerEventTriggers(sdk, kv);
   registerMcpEndpoints(sdk, kv, secret);
 
-  const healthMonitor = registerHealthMonitor(sdk, kv);
+  const healthMonitor = registerHealthMonitor(sdk, kv, {
+    enabled: runtimePolicy.healthMonitorEnabled,
+  });
 
-  const indexPersistence = new IndexPersistence(kv, bm25Index, vectorIndex);
+  const indexPersistence = new IndexPersistence(kv, bm25Index, vectorIndex, {
+    writesEnabled: runtimePolicy.indexPersistenceWritesEnabled,
+  });
   // Wire the persistence hook so delete paths can flush BM25/vector
   // index mutations to disk. Without this, an in-memory remove can be
   // lost across a hard process exit and the persisted snapshot
@@ -530,7 +541,7 @@ async function main() {
     `Ready. ${embeddingProvider ? "Triple-stream (BM25+Vector+Graph)" : "BM25+Graph"} search active.`,
   );
   bootLog(
-    `REST API: 128 endpoints at http://localhost:${config.restPort}/agentmemory/*`,
+    `REST API: 135 endpoints at http://localhost:${config.restPort}/agentmemory/*`,
   );
   bootLog(
     `MCP surface (opt-in via \`npx @agentmemory/mcp\`): ${getAllTools().length} tools · 6 resources · 3 prompts`,
@@ -548,7 +559,10 @@ async function main() {
   const autoForgetIntervalMs = parseInt(process.env.AUTO_FORGET_INTERVAL_MS || "3600000", 10);
   const consolidationIntervalMs = parseInt(process.env.CONSOLIDATION_INTERVAL_MS || "7200000", 10);
 
-  if (process.env.AUTO_FORGET_ENABLED !== "false") {
+  if (
+    runtimePolicy.backgroundMutationTimersEnabled &&
+    process.env.AUTO_FORGET_ENABLED !== "false"
+  ) {
     const autoForgetTimer = setInterval(async () => {
       try {
         await sdk.trigger({ function_id: "mem::auto-forget", payload: { dryRun: false } });
@@ -558,7 +572,10 @@ async function main() {
     bootLog(`Auto-forget: enabled (every ${autoForgetIntervalMs / 60000}m)`);
   }
 
-  if (process.env.LESSON_DECAY_ENABLED !== "false") {
+  if (
+    runtimePolicy.backgroundMutationTimersEnabled &&
+    process.env.LESSON_DECAY_ENABLED !== "false"
+  ) {
     const lessonDecayTimer = setInterval(async () => {
       try {
         await sdk.trigger({ function_id: "mem::lesson-decay-sweep", payload: {} });
@@ -568,7 +585,10 @@ async function main() {
     bootLog(`Lesson decay sweep: enabled (every 24h)`);
   }
 
-  if (process.env.INSIGHT_DECAY_ENABLED !== "false") {
+  if (
+    runtimePolicy.backgroundMutationTimersEnabled &&
+    process.env.INSIGHT_DECAY_ENABLED !== "false"
+  ) {
     const insightDecayTimer = setInterval(async () => {
       try {
         await sdk.trigger({ function_id: "mem::insight-decay-sweep", payload: {} });
@@ -581,17 +601,22 @@ async function main() {
   // recent-searches scope only needs the last entry per session;
   // sweeping anything older than the retention window keeps the scope
   // from growing unbounded across long-lived deployments.
-  const recentSearchesSweepTimer = setInterval(async () => {
-    try {
-      await sdk.trigger({
-        function_id: "mem::diagnostic::recent-searches-sweep",
-        payload: {},
-      });
-    } catch {}
-  }, 60 * 60 * 1000);
-  recentSearchesSweepTimer.unref();
+  if (runtimePolicy.backgroundMutationTimersEnabled) {
+    const recentSearchesSweepTimer = setInterval(async () => {
+      try {
+        await sdk.trigger({
+          function_id: "mem::diagnostic::recent-searches-sweep",
+          payload: {},
+        });
+      } catch {}
+    }, 60 * 60 * 1000);
+    recentSearchesSweepTimer.unref();
+  }
 
-  if (isConsolidationEnabled()) {
+  if (
+    runtimePolicy.backgroundMutationTimersEnabled &&
+    isConsolidationEnabled()
+  ) {
     const consolidationTimer = setInterval(async () => {
       try {
         await sdk.trigger({ function_id: "mem::consolidate-pipeline", payload: {} });

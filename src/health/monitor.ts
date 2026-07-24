@@ -8,6 +8,16 @@ const RSS_BUDGET_BYTES = 512 * 1024 * 1024;
 
 type RssBudgetResult = Pick<HealthSnapshot, "status" | "alerts">;
 
+type ConnectionStateEvents = {
+  on(event: "connection_state", listener: (state: string) => void): void;
+};
+
+function hasConnectionStateEvents(
+  sdk: ISdk,
+): sdk is ISdk & ConnectionStateEvents {
+  return "on" in sdk && typeof sdk.on === "function";
+}
+
 export function createRssBudgetTracker(
   collectGarbage: (() => void) | undefined = global.gc,
 ): (rss: number) => RssBudgetResult {
@@ -51,15 +61,17 @@ export function createRssBudgetTracker(
 export function registerHealthMonitor(
   sdk: ISdk,
   kv: StateKV,
+  options: { enabled?: boolean } = {},
 ): { stop: () => void } {
+  if (options.enabled === false) return { stop: () => {} };
   let connectionState = "connected";
   let prevCpuUsage = process.cpuUsage();
   let prevCpuTime = Date.now();
   const evaluateRssBudget = createRssBudgetTracker();
 
-  if (typeof sdk.on === "function") {
-    sdk.on("connection_state", (state?: unknown) => {
-      connectionState = state as string;
+  if (hasConnectionStateEvents(sdk)) {
+    sdk.on("connection_state", (state) => {
+      connectionState = state;
     });
   }
 
