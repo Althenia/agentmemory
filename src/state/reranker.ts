@@ -14,7 +14,7 @@ async function loadPipeline(): Promise<any> {
       const { pipeline: createPipeline } = await import(
         "@xenova/transformers"
       );
-      pipeline = await createPipeline(
+      pipeline = await (createPipeline as any)(
         "text-classification",
         "Xenova/ms-marco-MiniLM-L-6-v2",
         { quantized: true },

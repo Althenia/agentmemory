@@ -1552,6 +1552,22 @@ Set `AGENTMEMORY_OFFLINE_MAINTENANCE=true` for that isolated process. The mode r
 
 `minimumAgeSeconds` is a required positive integer. Supply the inflight owner/operation token pair to recover exactly one expired row, `expectedMarkerToken` to remove an old orphan marker, or both when recovering the final row and its marker. Omit the pair or marker only when that target is not being recovered. Unknown fields, partial token pairs, non-expired rows, operations still live in this process, token mismatches, young markers, and markers with other inflight rows are rejected. Recovery never deletes canonical records, generation metadata, or generation index data.
 
+Run the marker-only recovery proof against the included dedicated, in-memory
+engine fixture with no AgentMemory worker or other state client attached. Start
+the fixture in one terminal:
+
+```bash
+cd test/fixtures/derived-index-engine
+iii --config iii-config.yaml
+```
+
+Then run the proof from the repository root:
+
+```bash
+AGENTMEMORY_REAL_ENGINE_URL=ws://127.0.0.1:49234 \
+  pnpm exec vitest run test/derived-index-recovery.integration.test.ts
+```
+
 ---
 
 <h2 id="development"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/tags/light/section-development.svg"><img src="assets/tags/section-development.svg" alt="Development" height="32" /></picture></h2>

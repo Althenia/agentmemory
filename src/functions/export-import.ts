@@ -21,7 +21,6 @@ import type {
   Facet,
   Lesson,
   Insight,
-  ExportPagination,
   AccessLogExport,
 } from "../types.js";
 import { normalizeAccessLog } from "./access-tracker.js";

@@ -575,6 +575,7 @@ export interface AuditEntry {
     | "action_create"
     | "action_update"
     | "lease_acquire"
+    | "lease_renew"
     | "lease_release"
     | "routine_run"
     | "signal_send"
@@ -608,7 +609,12 @@ export interface AuditEntry {
     | "slot_replace"
     | "slot_create"
     | "slot_delete"
-    | "slot_reflect";
+    | "slot_reflect"
+    | "derived_index_begin"
+    | "derived_index_page"
+    | "derived_index_recover"
+    | "derived_index_activate"
+    | "derived_index_rollback";
   userId?: string;
   functionId: string;
   targetIds: string[];

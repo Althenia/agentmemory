@@ -484,6 +484,13 @@ export function registerDerivedIndexLifecycleFunctions(
     if (!generation) return lifecycleFailure(new Error("generation is required"), 400);
     try {
       const metadata = await beginDerivedIndexGeneration(kv, { generation });
+      await recordAudit(
+        kv,
+        "derived_index_begin",
+        "mem::derived-index-v2-begin",
+        [generation],
+        { status: metadata.status },
+      );
       return { success: true, metadata };
     } catch (err) {
       return lifecycleFailure(err);
@@ -513,6 +520,13 @@ export function registerDerivedIndexLifecycleFunctions(
         generation,
         ...(typeof limit === "number" ? { limit } : {}),
       });
+      await recordAudit(
+        kv,
+        "derived_index_page",
+        "mem::derived-index-v2-page",
+        [generation],
+        { processed: result.processed, complete: result.complete },
+      );
       return { success: true, ...result };
     } catch (err) {
       return lifecycleFailure(err);
@@ -551,6 +565,17 @@ export function registerDerivedIndexLifecycleFunctions(
     if (!generation) return lifecycleFailure(new Error("generation is required"), 400);
     try {
       const active = await activateDerivedIndexGeneration(kv, { generation });
+      await recordAudit(
+        kv,
+        "derived_index_activate",
+        "mem::derived-index-v2-activate",
+        [generation],
+        {
+          ...(active.previousGeneration
+            ? { previousGeneration: active.previousGeneration }
+            : {}),
+        },
+      );
       return { success: true, active };
     } catch (err) {
       return lifecycleFailure(err);
@@ -562,6 +587,17 @@ export function registerDerivedIndexLifecycleFunctions(
     if (!generation) return lifecycleFailure(new Error("generation is required"), 400);
     try {
       const active = await rollbackDerivedIndexGeneration(kv, { generation });
+      await recordAudit(
+        kv,
+        "derived_index_rollback",
+        "mem::derived-index-v2-rollback",
+        [generation],
+        {
+          ...(active.previousGeneration
+            ? { previousGeneration: active.previousGeneration }
+            : {}),
+        },
+      );
       return { success: true, active };
     } catch (err) {
       return lifecycleFailure(err);
@@ -617,6 +653,13 @@ export function registerDerivedIndexLifecycleFunctions(
           : {}),
         ...(typeof expectedMarkerToken === "string" ? { expectedMarkerToken } : {}),
       });
+      await recordAudit(
+        kv,
+        "derived_index_recover",
+        "mem::derived-index-v2-recover",
+        ["derived-index-lifecycle"],
+        { ...result },
+      );
       return { success: true, ...result };
     } catch (err) {
       return lifecycleFailure(err);

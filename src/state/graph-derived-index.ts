@@ -13,6 +13,7 @@ const DERIVED_INDEX_LIFECYCLE_LOCK = "derived-index-v2-lifecycle";
 
 export const DERIVED_INDEX_ACTIVE_KEY = "active";
 export const DERIVED_INDEX_MAINTENANCE_KEY = "maintenance";
+export const DERIVED_INDEX_PAGE_BUDGET_MS = 175_000;
 const DERIVED_INDEX_KINDS = [
   "graph-nodes",
   "graph-edges",
@@ -80,6 +81,24 @@ export interface DerivedIndexRecoveryOptions {
 export interface DerivedIndexRecoveryResult {
   recoveredInflight: number;
   removedMaintenance: boolean;
+}
+
+export interface DerivedIndexGenerationOptions {
+  generation: string;
+}
+
+export interface DerivedIndexPageOptions extends DerivedIndexGenerationOptions {
+  limit?: number;
+}
+
+export interface DerivedIndexStatusOptions {
+  generation?: string;
+}
+
+export interface DerivedIndexPageResult {
+  processed: number;
+  complete: boolean;
+  metadata: DerivedIndexGenerationMetadata;
 }
 
 export class DerivedIndexLifecycleConflictError extends Error {
@@ -599,7 +618,7 @@ function completedMetadata(
 
 async function beginDerivedIndexGenerationUnlocked(
   kv: StateKV,
-  options: { generation: string },
+  options: DerivedIndexGenerationOptions,
 ): Promise<DerivedIndexGenerationMetadata> {
   requireGeneration(options.generation);
   const now = new Date().toISOString();
@@ -662,7 +681,7 @@ async function beginDerivedIndexGenerationUnlocked(
 
 export function beginDerivedIndexGeneration(
   kv: StateKV,
-  options: { generation: string },
+  options: DerivedIndexGenerationOptions,
 ): Promise<DerivedIndexGenerationMetadata> {
   return withLifecycleLock(() => beginDerivedIndexGenerationUnlocked(kv, options));
 }
@@ -792,12 +811,8 @@ async function rebuildObservationPage(
 
 async function rebuildDerivedIndexGenerationPageUnlocked(
   kv: StateKV,
-  options: { generation: string; limit?: number },
-): Promise<{
-  processed: number;
-  complete: boolean;
-  metadata: DerivedIndexGenerationMetadata;
-}> {
+  options: DerivedIndexPageOptions,
+): Promise<DerivedIndexPageResult> {
   requireGeneration(options.generation);
   const limit = options.limit ?? 100;
   if (!Number.isInteger(limit) || limit < 1 || limit > 128) {
@@ -870,20 +885,36 @@ async function rebuildDerivedIndexGenerationPageUnlocked(
 
 export function rebuildDerivedIndexGenerationPage(
   kv: StateKV,
-  options: { generation: string; limit?: number },
-): Promise<{
-  processed: number;
-  complete: boolean;
-  metadata: DerivedIndexGenerationMetadata;
-}> {
-  return withLifecycleLock(() =>
+  options: DerivedIndexPageOptions,
+): Promise<DerivedIndexPageResult> {
+  const operation = withLifecycleLock(() =>
     rebuildDerivedIndexGenerationPageUnlocked(kv, options)
   );
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(
+        new Error(
+          `derived-index page exceeded ${DERIVED_INDEX_PAGE_BUDGET_MS}ms budget`,
+        ),
+      ),
+      DERIVED_INDEX_PAGE_BUDGET_MS,
+    );
+    operation.then(
+      (result) => {
+        clearTimeout(timer);
+        resolve(result);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 async function getDerivedIndexGenerationStatusUnlocked(
   kv: StateKV,
-  options: { generation?: string } = {},
+  options: DerivedIndexStatusOptions = {},
 ): Promise<{
   active: ActiveDerivedIndexGeneration | null;
   maintenance: DerivedIndexMaintenanceMarker | null;
@@ -920,7 +951,7 @@ async function getDerivedIndexGenerationStatusUnlocked(
 
 export function getDerivedIndexGenerationStatus(
   kv: StateKV,
-  options: { generation?: string } = {},
+  options: DerivedIndexStatusOptions = {},
 ): Promise<{
   active: ActiveDerivedIndexGeneration | null;
   maintenance: DerivedIndexMaintenanceMarker | null;
@@ -1047,7 +1078,7 @@ export function recoverDerivedIndexLifecycle(
 
 async function activateDerivedIndexGenerationUnlocked(
   kv: StateKV,
-  options: { generation: string },
+  options: DerivedIndexGenerationOptions,
 ): Promise<ActiveDerivedIndexGeneration> {
   requireGeneration(options.generation);
   const metadata = await readGenerationMetadata(kv, options.generation);
@@ -1116,7 +1147,7 @@ async function activateDerivedIndexGenerationUnlocked(
 
 export function activateDerivedIndexGeneration(
   kv: StateKV,
-  options: { generation: string },
+  options: DerivedIndexGenerationOptions,
 ): Promise<ActiveDerivedIndexGeneration> {
   return withLifecycleLock(() =>
     activateDerivedIndexGenerationUnlocked(kv, options)
@@ -1125,7 +1156,7 @@ export function activateDerivedIndexGeneration(
 
 async function rollbackDerivedIndexGenerationUnlocked(
   kv: StateKV,
-  options: { generation: string },
+  options: DerivedIndexGenerationOptions,
 ): Promise<ActiveDerivedIndexGeneration> {
   requireGeneration(options.generation);
   const target = await readGenerationMetadata(kv, options.generation);
@@ -1228,7 +1259,7 @@ async function rollbackDerivedIndexGenerationUnlocked(
 
 export function rollbackDerivedIndexGeneration(
   kv: StateKV,
-  options: { generation: string },
+  options: DerivedIndexGenerationOptions,
 ): Promise<ActiveDerivedIndexGeneration> {
   return withLifecycleLock(() =>
     rollbackDerivedIndexGenerationUnlocked(kv, options)

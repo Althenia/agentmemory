@@ -27,6 +27,20 @@ const DEFAULT_DECAY: DecayConfig = {
   },
 };
 
+function computeReinforcementBoost(
+  accessTimestamps: number[],
+  sigma: number,
+): number {
+  const now = Date.now();
+  let boost = 0;
+  for (const tAccess of accessTimestamps) {
+    if (!Number.isFinite(tAccess)) continue;
+    const daysSinceAccess = (now - tAccess) / (1000 * 60 * 60 * 24);
+    if (daysSinceAccess > 0) boost += 1 / daysSinceAccess;
+  }
+  return boost * sigma;
+}
+
 function resolveDecayConfig(
   input?: Partial<DecayConfig>,
 ): { config: DecayConfig } | { error: string } {
@@ -60,38 +74,6 @@ function resolveDecayConfig(
     };
   }
   return { config };
-}
-
-function computeReinforcementBoost(
-  accessTimestamps: number[],
-  sigma: number,
-): number {
-  const now = Date.now();
-  let boost = 0;
-  for (const tAccess of accessTimestamps) {
-    if (!Number.isFinite(tAccess)) continue;
-    const daysSinceAccess = (now - tAccess) / (1000 * 60 * 60 * 24);
-    if (daysSinceAccess > 0) {
-      boost += 1 / daysSinceAccess;
-    }
-  }
-  return boost * sigma;
-}
-
-function computeRetention(
-  salience: number,
-  createdAt: string,
-  accessTimestamps: number[],
-  config: DecayConfig,
-): number {
-  const deltaT =
-    (Date.now() - new Date(createdAt).getTime()) / (1000 * 60 * 60 * 24);
-  const temporalDecay = Math.exp(-config.lambda * deltaT);
-  const reinforcementBoost = computeReinforcementBoost(
-    accessTimestamps,
-    config.sigma,
-  );
-  return Math.min(1, salience * temporalDecay + reinforcementBoost);
 }
 
 function computeSalience(

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { registerGraphFunction } from "../src/functions/graph.js";
 import { StateKV } from "../src/state/kv.js";
 import { registerApiTriggers } from "../src/triggers/api.js";
+import { KV } from "../src/state/schema.js";
 
 interface TriggerRequest {
   function_id: string;
@@ -35,6 +36,90 @@ const authorizedRequest = (body: Record<string, unknown>) => ({
 });
 
 describe("graph derived-index backfill API", () => {
+  it("records repository audit entries for every successful lifecycle mutation", async () => {
+    const store = new Map<string, Map<string, unknown>>();
+    const scope = (name: string) => {
+      let values = store.get(name);
+      if (!values) {
+        values = new Map<string, unknown>();
+        store.set(name, values);
+      }
+      return values;
+    };
+    const functions = integratedLifecycleApi(async ({ function_id, payload }) => {
+      const values = scope(payload.scope as string);
+      const key = payload.key as string;
+      if (function_id === "state::get") return values.get(key) ?? null;
+      if (function_id === "state::set") {
+        values.set(key, payload.value);
+        return payload.value;
+      }
+      if (function_id === "state::delete") {
+        values.delete(key);
+        return undefined;
+      }
+      if (function_id === "state::list-page") {
+        const cursor = payload.cursor as string | undefined;
+        const limit = (payload.limit as number | undefined) ?? 100;
+        const entries = [...values.entries()]
+          .sort(([left], [right]) => left.localeCompare(right))
+          .filter(([entryKey]) => cursor === undefined || entryKey > cursor);
+        const items = entries.slice(0, limit);
+        return {
+          items: items.map(([itemKey, value]) => ({ key: itemKey, value })),
+          ...(entries.length > limit
+            ? { next_cursor: items[items.length - 1]![0] }
+            : {}),
+        };
+      }
+      throw new Error(`Unexpected function: ${function_id}`);
+    });
+    const call = async (operation: string, body: Record<string, unknown>) => {
+      const response = await functions.get(`mem::derived-index-v2-${operation}`)!(body) as {
+        success: boolean;
+        complete?: boolean;
+      };
+      expect(response.success).toBe(true);
+      return response;
+    };
+    const finish = async (generation: string) => {
+      for (let attempt = 0; attempt < 10; attempt++) {
+        if ((await call("page", { generation })).complete) return;
+      }
+      throw new Error(`generation ${generation} did not complete`);
+    };
+
+    await call("begin", { generation: "gen-audit-one" });
+    await finish("gen-audit-one");
+    await call("activate", { generation: "gen-audit-one" });
+    await call("begin", { generation: "gen-audit-two" });
+    await finish("gen-audit-two");
+    await call("activate", { generation: "gen-audit-two" });
+    await call("rollback", { generation: "gen-audit-one" });
+    scope(KV.graphDerivedMetadata).set("maintenance", {
+      version: 2,
+      operation: "rebuild",
+      generation: "gen-orphan",
+      ownerToken: "marker-audit",
+      startedAt: "2000-01-01T00:00:00.000Z",
+    });
+    await call("recover", {
+      minimumAgeSeconds: 60,
+      expectedMarkerToken: "marker-audit",
+    });
+
+    const operations = [...scope(KV.audit).values()].map(
+      (entry) => (entry as { operation: string }).operation,
+    );
+    expect(new Set(operations)).toEqual(new Set([
+      "derived_index_begin",
+      "derived_index_page",
+      "derived_index_activate",
+      "derived_index_rollback",
+      "derived_index_recover",
+    ]));
+  });
+
   it("returns an empty healthy status when optional state keys are undefined", async () => {
     const functions = integratedLifecycleApi(async (request) => {
       if (request.function_id === "state::get") return undefined;

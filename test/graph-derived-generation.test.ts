@@ -98,6 +98,11 @@ function createHarness() {
     reached: () => void;
     release: Promise<void>;
   } | null = null;
+  let blockedRequest: {
+    predicate: (request: StateRequest) => boolean;
+    reached: () => void;
+    release: Promise<void>;
+  } | null = null;
   const scope = (name: string): Map<string, unknown> => {
     let values = store.get(name);
     if (!values) {
@@ -107,6 +112,12 @@ function createHarness() {
     return values;
   };
   const trigger = vi.fn(async (request: StateRequest) => {
+    const pendingBlock = blockedRequest;
+    if (pendingBlock?.predicate(request)) {
+      blockedRequest = null;
+      pendingBlock.reached();
+      await pendingBlock.release;
+    }
     const payload = request.payload;
     const scopeName = payload.scope as string;
     const key = payload.key as string;
@@ -167,6 +178,22 @@ function createHarness() {
         release = resolve;
       });
       blockedAfterSet = {
+        predicate,
+        reached: markReached,
+        release: waitForRelease,
+      };
+      return { reached, release };
+    },
+    blockRequest: (predicate: (request: StateRequest) => boolean) => {
+      let markReached!: () => void;
+      let release!: () => void;
+      const reached = new Promise<void>((resolve) => {
+        markReached = resolve;
+      });
+      const waitForRelease = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      blockedRequest = {
         predicate,
         reached: markReached,
         release: waitForRelease,
@@ -406,6 +433,50 @@ describe("derived-index v2 generation lifecycle", () => {
       limit: 1,
     });
     expect(retry.metadata.progress["graph-nodes"]?.count).toBe(1);
+  });
+
+  it("returns before 180 seconds without advancing resumable progress when page work stalls", async () => {
+    vi.useFakeTimers();
+    const api = generationApi();
+    const harness = createHarness();
+    seedCanonicalCorpus(harness);
+    await api.beginDerivedIndexGeneration(harness.kv, { generation: "gen-deadline" });
+    const blocked = harness.blockRequest(
+      (request) => request.function_id === "state::list-page" &&
+        request.payload.scope === KV.graphNodes,
+    );
+    const page = api.rebuildDerivedIndexGenerationPage(harness.kv, {
+      generation: "gen-deadline",
+      limit: 1,
+    });
+    await blocked.reached;
+    let outcome: unknown;
+    void page.then(
+      (value) => {
+        outcome = value;
+      },
+      (error: unknown) => {
+        outcome = error;
+      },
+    );
+
+    try {
+      await vi.advanceTimersByTimeAsync(179_999);
+      expect(outcome).toBeInstanceOf(Error);
+      expect((outcome as Error).message).toMatch(/page.*budget/i);
+      const metadata = harness.store.get(KV.graphDerivedMetadata)?.get(
+        "generation:gen-deadline",
+      ) as GenerationMetadata;
+      expect(metadata.progress["graph-nodes"]).toMatchObject({
+        count: 0,
+        checksum: expect.any(String),
+        complete: false,
+      });
+    } finally {
+      blocked.release();
+      await page.catch(() => undefined);
+      vi.useRealTimers();
+    }
   });
 
   it("blocks activation while a pre-maintenance canonical mutation is in flight", async () => {
